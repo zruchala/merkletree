@@ -18,11 +18,6 @@ struct MerkleTree {
     leaves: Vec<NodeHash>
 }
 
-struct Proof {
-    pair: usize,
-    hashes: Vec<NodeHash>
-}
-
 impl MerkleTree {
     fn new() -> Self {
         let hasher = Keccak256::new();
@@ -55,7 +50,7 @@ impl MerkleTree {
         self.hasher.finalize_reset()
             .as_slice()
             .try_into()
-            .expect("An error occurred during convertion")
+            .expect("An error occurred during conversion")
     }
 
     fn interior_hash(&mut self, left: NodeHash, right: NodeHash) -> NodeHash {
@@ -67,7 +62,7 @@ impl MerkleTree {
         self.hasher.finalize_reset()
             .as_slice()
             .try_into()
-            .expect("An error occurred during convertion")
+            .expect("An error occurred during conversion")
     }
 
     fn sort_nodes(&self, left: NodeHash, right: NodeHash) -> [NodeHash; 2] {
@@ -104,9 +99,12 @@ impl MerkleTree {
                             }
                         }
                     } else {
-                        // Unabalanced tree detected.
+                        // Unbalanced tree detected.
                         // In that case just elevate the current hash to the higher level
                         higher_level.push(data[index]);
+                        if let Some(p) = proof {
+                            p.pair = p.pair / 2;
+                        }
                     }
                     index += 2;
                 }
@@ -139,6 +137,15 @@ impl MerkleTree {
     }
 }
 
+struct Proof {
+    pair: usize,
+    hashes: Vec<NodeHash>
+}
+
+impl Proof {
+
+}
+
 fn read_items(filename: &String) -> Vec<String> {
     if !Path::new(filename).exists() {
         panic!("No such file '{}' exists", filename);
@@ -164,11 +171,12 @@ where P: AsRef<Path>, {
     Ok(io::BufReader::new(file).lines())
 }
 
-fn to_node_hash(input: &str) -> [u8; 32] {
-    hex::decode(input)
-        .map(|result| result.try_into()
-        .expect("Cannot convert hex to NodeHash ([u8; 32])") )
-        .unwrap()
+fn to_node_hash(input: &str) -> NodeHash {
+    match hex::decode(input)
+        .map(|r| r.try_into().expect("Cannot convert hex to NodeHash ([u8; 32])")) {
+        Ok(v) => v,
+        Err(er) => panic!("Argument: '{}' failed with '{}'", input, er)
+    }
 }
 
 /// Examples:
@@ -199,48 +207,49 @@ fn main() {
     
     if env::args().len() < 2 {
         println!("For more information try `merkletree --help`");
-        std::process::exit(0x0100);
+        return;
     }
 
     let opt = Opt::from_args();
 
     if let Some(line) = opt.line {
         match opt.file {
-            None => {
-                println!("Please specify the input file, ex: `merkletree -p <line> file.txt`");
-                std::process::exit(0x0100);
-            }
-            Some(file) => {
-                let lines = read_items(&file);
-                match lines.iter().position(|e| e.eq(&line)) {
-                    None => panic!("Line '{}' not found", line),
-                    Some(index) => {
-                        let mut merkle_tree = MerkleTree::from_data(lines);
-                        let prof_vec = merkle_tree.proof(index);
-                        for p in prof_vec {
-                            print!("{} ", hex::encode(p));
-                        }
-                    }
-                }
-            }
+            None => println!("Please specify the input file, ex: `merkletree -p <line> file.txt`"),
+            Some(file) => print_proof(line, &file)
         }
     } else if let Some(path) = opt.lemma_path {
-        let mut proof: Vec<NodeHash> = Vec::new();
-        let mut n = 1;
-        while n < path.len() - 1 {
-            proof.push(to_node_hash(&path[n]));
-            n += 1;
-        }
-        let root: NodeHash = to_node_hash(&path[n]);
-        
-        let mut merkle_tree = MerkleTree::new();
-        let result = merkle_tree.validate(&path[0], proof);
-        println!("Is valid proof? {}", result == root);        
-
+        check_proof(path);
     } else if let Some(file) = opt.file {
-        let leaves = read_items(&file);
-        let mut merkle_tree = MerkleTree::from_data(leaves);
-        println!("{}", hex::encode(merkle_tree.root()));
+        let mut merkle_tree = MerkleTree::from_data(read_items(&file));
+        println!("Root: {}", hex::encode(merkle_tree.root()));
     }    
+}
+
+fn print_proof(line: String, file: &String) {
+    let lines = read_items(&file);
+    match lines.iter().position(|e| e.eq(&line)) {
+        None => panic!("Line '{}' not found within file: '{}'", line, &file),
+        Some(index) => {
+            let prof_vec= (MerkleTree::from_data(lines)).proof(index);
+            print!("Proof: ");
+            for hash in prof_vec {
+                print!("{} ", hex::encode(hash));
+            }
+            println!();
+        }
+    }
+}
+
+fn check_proof(path: Vec<String>) {
+    if path.len() < 3 {
+        println!("Invalid arguments number. Try `merkletree --help` to get some help");
+    }
+    let mut proof: Vec<NodeHash> = Vec::new();
+    let root: NodeHash = to_node_hash(&path[path.len()-1]);
+    for i in 1..path.len()-1 {
+        proof.push(to_node_hash(&path[i]));
+    }
+    let result = (MerkleTree::new()).validate(&path[0], proof);
+    println!("Is proof valid? {}", result == root);
 }
 
