@@ -78,7 +78,8 @@ impl MerkleTree {
         [left, right]
     }
 
-    fn create_tree(&mut self, data: Vec<NodeHash>, proof: &mut Option<&mut Proof>) -> NodeHash {
+    /// hash leaves to produce root and proof if requested.
+    fn hash_leaves(&mut self, data: Vec<NodeHash>, proof: &mut Option<&mut Proof>) -> NodeHash {
         return match data.len() {
             1 => data[0],
             d if d > 1 => {
@@ -90,41 +91,35 @@ impl MerkleTree {
                         higher_level.push(hash);
 
                         if let Some(p) = proof {
-                            if p.pair == index {
-                                p.hashes.push(data[index+1]);
-                                p.pair = p.pair / 2;
-                            } else if p.pair == index + 1 {
-                                p.hashes.push(data[index]);
-                                p.pair = p.pair / 2;
-                            }
+                            p.find_pair(index, &data);
                         }
                     } else {
                         // Unbalanced tree detected.
                         // In that case just elevate the current hash to the higher level
                         higher_level.push(data[index]);
                         if let Some(p) = proof {
-                            p.pair = p.pair / 2;
+                            p.next_item_index();
                         }
                     }
                     index += 2;
                 }
         
-                return self.create_tree(higher_level, proof);
+                return self.hash_leaves(higher_level, proof);
             },
             _ => panic!("Invalid data")
         }
     }
 
     fn root(&mut self) -> NodeHash {
-        self.create_tree(self.leaves.clone(), &mut None)
+        self.hash_leaves(self.leaves.clone(), &mut None)
     }
 
     fn proof(&mut self, item: usize) -> Vec<NodeHash> {
         let mut proof = Proof{
-            pair: item,
+            item_index: item,
             hashes: Vec::new()
         };
-        self.create_tree(self.leaves.clone(), &mut Some(&mut proof));
+        self.hash_leaves(self.leaves.clone(), &mut Some(&mut proof));
         proof.hashes
     }
 
@@ -138,12 +133,25 @@ impl MerkleTree {
 }
 
 struct Proof {
-    pair: usize,
+    item_index: usize,
     hashes: Vec<NodeHash>
 }
 
 impl Proof {
+    /// save paired item
+    fn find_pair(&mut self, index: usize, data: &Vec<[u8; 32]>) {
+        if self.item_index == index {
+            self.hashes.push(data[index+1]);
+            self.next_item_index();
+        } else if self.item_index == index + 1 {
+            self.hashes.push(data[index]);
+            self.next_item_index();
+        }
+    }
 
+    fn next_item_index(&mut self) {
+        self.item_index = self.item_index / 2;
+    }
 }
 
 fn read_items(filename: &String) -> Vec<String> {
@@ -253,3 +261,25 @@ fn check_proof(path: Vec<String>) {
     println!("Is proof valid? {}", result == root);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_root() {
+        let mut mt = MerkleTree::from_data(read_items(&String::from("sample_input.txt")));
+        let root = mt.root();
+        assert_eq!(hex::encode(root), "7b5014d5b73125a763b97331c4f4cdb47fd94151b8dbfc625b77fd2bd249a2b7");
+    }
+
+    #[test]
+    fn check_proof() {
+        let lines = read_items(&String::from("sample_input.txt"));
+        let line = &lines[1].clone();
+        let mut mt = MerkleTree::from_data(lines);
+        let root = mt.root();
+        let proof = mt.proof(1);
+        let validated = mt.validate(line,proof.clone());
+        assert_eq!(root, validated);
+    }
+}
